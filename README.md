@@ -1,3 +1,22 @@
+CS761 project
+# Selective Progressive Prompts
+
+To run selective progressive prompt, 
+Step1: Setup as mentioned in the original progressive prompt repo, attached below.
+Step2: Run below command inside T5_codebase folder.
+
+#NOTE: command means
+--task_list ..., current command run the long sequence mentioned in our paper, consists of 15 tasks.
+--model_name t5-small, means we are using t5-small, can update to other models like t5-large if you have enough resource.
+--select_k_per_class 200, means we are using sample-size of 200 for each task.
+
+```
+python train_t5_cl.py --task_list mnli cb wic copa qqp boolq rte imdb yelp_review_full amazon sst2 dbpedia_14 ag_news multirc yahoo_answers_topics --select_k_per_class 200 --lr 0.3 --num_epochs 10 --freeze_weights 1 --prefix_len 10 --model_name t5-small --early_stopping 1 --save_name T5_experiment --save_dir . --prefix_MLP mlp
+```
+
+-------------------------------------------------------------------------------------------------------------------
+FOLLOWING IS README file from Progressive prompt paper:
+
 # Progressive Prompts
 
 **Our work on Progressive Prompts is accepted to ICLR 2023!** 🎉
