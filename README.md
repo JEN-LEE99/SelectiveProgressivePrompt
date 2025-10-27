@@ -6,8 +6,11 @@ Step1: Setup as mentioned in the original progressive prompt repo, attached belo
 Step2: Run below command inside T5_codebase folder.
 
 #NOTE: command means
+
 --task_list ..., current command run the long sequence mentioned in our paper, consists of 15 tasks.
+
 --model_name t5-small, means we are using t5-small, can update to other models like t5-large if you have enough resource.
+
 --select_k_per_class 200, means we are using sample-size of 200 for each task.
 
 ```
