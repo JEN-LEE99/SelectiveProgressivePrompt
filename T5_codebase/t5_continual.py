@@ -1,9 +1,15 @@
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+
 import torch
 from torch import nn
 import pandas as pd
 import numpy as np
 from tqdm.auto import tqdm
 import logging, os, argparse
+
+import torch.nn.functional as F
+from scipy.stats import spearmanr
 
 import t5_dataset
 from itertools import cycle
@@ -19,6 +25,7 @@ class ResMLP(torch.nn.Module):
                  module_type='MLP1',
                  emb_dimension=512,
                  residual=True,
+                 layer_norm=True,
                  ):
         """MLP class for soft prompt re-parameterization. MLP can have a Residual connection.
         Args:
@@ -279,11 +286,13 @@ class T5ContinualLearner:
             self.prefix_MLPs = None
         else:
             print('Using MLP reparametrization with bottleneck = ', bottleneck_size)
-            N = self.model.encoder.embed_tokens.weight.shape[1]
-            self.prefix_MLPs = {t: ResMLP(bottleneck_size=bottleneck_size,
-                                          module_type=prefix_MLP,
-                                          #layer_norm=layer_norm,
-                                          emb_dimension=N) for t in self.task_list}
+            #N = self.model.encoder.embed_tokens.weight.shape[1]
+            self.prefix_MLPs = {
+                task: ResMLP(bottleneck_size=bottleneck_size).to(self.device)
+                ##for task in ['imdb', 'cb', 'sst2', 'dbpedia_14']
+                for task in ['mnli', 'cb', 'wic', 'copa', 'qqp', 'boolq', 'rte', 'imdb', 'yelp_review_full', 'amazon', 'sst2', 'dbpedia_14', 'ag_news', 'multirc', 'yahoo_answers_topics']
+            }
+
         if self.prefix_MLPs!=None:
             for t in self.task_list:
                 self.prefix_MLPs[t].to(self.device)
@@ -706,8 +715,49 @@ class T5ContinualLearner:
             self.optimizer.step()
             self.optimizer.zero_grad()
 
+    def get_task_representation(self, task, num_batches=1):
+        """Extracts a simple representation for a task."""
+        self.model.eval()
+        dataloader = self.tasks_data_dict[task]['train']
 
-    
+        all_embeds = []
+        with torch.no_grad():
+            for i, batch in enumerate(dataloader):
+                if i >= num_batches:
+                    break
+
+                # Try different possible keys for T5 datasets
+                if 'input_ids' in batch:
+                    inputs = batch['input_ids'].to(self.device)
+                elif 'source_ids' in batch:
+                    inputs = batch['source_ids'].to(self.device)
+                else:
+                    raise KeyError(f"No input IDs found in batch keys: {batch.keys()}")
+
+                # Get encoder hidden states
+                encoder_outputs = self.model.encoder(inputs)
+                task_rep = encoder_outputs.last_hidden_state.mean(dim=1)  # mean pooling
+                all_embeds.append(task_rep.cpu())
+
+        return torch.cat(all_embeds).mean(dim=0).numpy()
+
+    def task_similarity(self, rep_a, rep_b, method='cosine'):
+        """Compute similarity between two task representations."""
+
+        if method == 'cosine':
+            # Ensure both are tensors
+            if not isinstance(rep_a, torch.Tensor):
+                rep_a = torch.tensor(rep_a, dtype=torch.float32)
+            if not isinstance(rep_b, torch.Tensor):
+                rep_b = torch.tensor(rep_b, dtype=torch.float32)
+            return F.cosine_similarity(rep_a.unsqueeze(0), rep_b.unsqueeze(0)).item()
+
+        elif method == 'spearman':
+            return spearmanr(rep_a, rep_b).correlation
+
+        else:
+            raise ValueError(f"Unknown similarity method: {method}")
+
     # Perform training on a single task
     def train_one_task(self,
                        task,
@@ -715,7 +765,8 @@ class T5ContinualLearner:
                        progressive=True,
                        eval_every_N=1,
                        eval_on_all_tasks=False,
-                       data_replay_freq=-1):
+                       data_replay_freq=-1,
+                       similarity_threshold=0.98):
 
         print('task = ', task)
         if progressive:
@@ -729,6 +780,27 @@ class T5ContinualLearner:
             mlp = self.prefix_MLPs[task]
             self.freeze_unfreeze_mlps([x for x in self.task_list if x!=task], requires_grad=False)
             self.freeze_unfreeze_mlps([task], requires_grad=True) # unfreezing current task
+
+            # # Unfreeze the last trained task’s MLP as well (if exists)
+            # current_idx = self.task_list.index(task)
+            # if current_idx > 0:
+            #     prev_task = self.task_list[current_idx - 1]
+            #     print(f"Also unfreezing previous task MLP: {prev_task}")
+            #     self.freeze_unfreeze_mlps([prev_task], requires_grad=True)
+
+            # Compute similarity-based unfreezing
+            if not hasattr(self, 'task_reps'):
+                self.task_reps = {}
+
+            if len(self.task_reps) > 0:
+                print("Computing similarities to previous tasks...")
+                curr_rep = self.get_task_representation(task)
+                for prev_task, prev_rep in self.task_reps.items():
+                    sim = self.task_similarity(curr_rep, prev_rep, method='cosine')
+                    print(f"Similarity({task}, {prev_task}) = {sim:.3f}")
+                    if sim > similarity_threshold:
+                        print(f"🔓 Unfreezing similar task MLP: {prev_task} (sim={sim:.2f})")
+                        self.freeze_unfreeze_mlps([prev_task], requires_grad=True)
 
         model = self.model
 
@@ -816,6 +888,11 @@ class T5ContinualLearner:
         else:
             if self.early_stopping:
                 self.restore_best_model()
+
+        # === 5️⃣ Save task representation ===
+        if self.prefix_MLPs is not None:
+            self.task_reps[task] = self.get_task_representation(task)
+
         return val_acc
 
 

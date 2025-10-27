@@ -1,3 +1,6 @@
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+
 import pandas as pd
 import numpy as np
 
@@ -239,7 +242,10 @@ class T5Dataset:
             df['label'] = df['label'] - 1
             dataset = datasets.Dataset.from_pandas(df)
         elif task == 'mnli':
-            dataset = load_dataset('LysandreJik/glue-mnli-train', split=split)
+            #dataset = load_dataset('LysandreJik/glue-mnli-train', split=split)
+            if split == 'validation':
+                split = 'validation_matched'
+            dataset = load_dataset('glue', 'mnli', split=split)
         elif task == 'qnli':
             dataset = load_dataset('SetFit/qnli', split=split)
         elif task == 'stsb':

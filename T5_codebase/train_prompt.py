@@ -1,3 +1,6 @@
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+
 import torch
 from torch import nn
 import pandas as pd
@@ -301,7 +304,8 @@ def main(args):
                                      )
 
     prompt_weigths = get_prompt(TrainerT5, prompt_len=args.prefix_len)
-    TrainerT5.model.prompt = nn.Parameter(torch.tensor(prompt_weigths, requires_grad=True))
+    TrainerT5.model.prompts = []
+    TrainerT5.model.prompts.append(nn.Parameter(torch.tensor(prompt_weigths, requires_grad=True)))
     print('created prompt: ', prompt_weigths.shape)
 
     if args.prefix_MLP != 'None':
@@ -314,6 +318,13 @@ def main(args):
                                      dropout=args.mlp_dropout,
                                      #layer_norm=False
                                      )
+    # --- NEW: Unfreeze last task + new prompt ---
+    # Freeze all older prompts except the most recent one
+    for i, p in enumerate(TrainerT5.model.prompts):
+        if i < len(TrainerT5.model.prompts) - 1:
+            p.requires_grad = False
+        else:
+            p.requires_grad = True
 
     lr_mlp = args.lr_mlp if args.lr_mlp!=-1 else args.lr
     optimizer_grouped_parameters = [
